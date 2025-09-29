@@ -1,0 +1,332 @@
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, Image, StyleSheet, Alert } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { extractTextFromImage } from '../services/ocr';
+import { Picker } from '@react-native-picker/picker';
+import { SUPPORTED_SCRIPTS } from '../services/transliteration';
+
+export default function LiveCameraScreen({ navigation, route }) {
+  const [imageUri, setImageUri] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [sourceLang, setSourceLang] = useState('Auto');
+  const [targetLang, setTargetLang] = useState('Hindi');
+
+  const [lastOriginalText, setLastOriginalText] = useState(null);
+  const [lastTransliteratedText, setLastTransliteratedText] = useState(null);
+  const [lastSourceScript, setLastSourceScript] = useState(null);
+  const [lastTargetScript, setLastTargetScript] = useState(null);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      if (route.params?.transliteratedText) {
+        setLastOriginalText(route.params.originalText);
+        setLastTransliteratedText(route.params.transliteratedText);
+        setLastSourceScript(route.params.sourceScript);
+        setLastTargetScript(route.params.targetScript);
+        // Clear params to avoid re-triggering on subsequent focus
+        navigation.setParams({ transliteratedText: undefined });
+      }
+    });
+
+    return unsubscribe;
+  }, [navigation, route.params]);
+
+  const takePhoto = async () => {
+    let result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 1,
+    });
+    if (!result.canceled) {
+      setImageUri(result.assets[0].uri);
+      // Clear previous result when new image is selected
+      setLastOriginalText(null);
+      setLastTransliteratedText(null);
+      setLastSourceScript(null);
+      setLastTargetScript(null);
+    }
+  };
+
+  const pickFromGallery = async () => {
+    let result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 1,
+    });
+    if (!result.canceled) {
+      setImageUri(result.assets[0].uri);
+      // Clear previous result when new image is selected
+      setLastOriginalText(null);
+      setLastTransliteratedText(null);
+      setLastSourceScript(null);
+      setLastTargetScript(null);
+    }
+  };
+
+  const processImage = async () => {
+    if (!imageUri) return;
+    try {
+      setIsProcessing(true);
+      const { original, transliterated } = await extractTextFromImage(imageUri, sourceLang, targetLang);
+      if (!original || original.trim().length === 0) {
+        Alert.alert(
+          'No Text Detected',
+          'No readable text was found in the image. Please try another image.'
+        );
+        // Clear previous result if no text detected
+        setLastOriginalText(null);
+        setLastTransliteratedText(null);
+        setLastSourceScript(null);
+        setLastTargetScript(null);
+        return;
+      }
+      // Store the result in state
+      setLastOriginalText(original);
+      setLastTransliteratedText(transliterated);
+      setLastSourceScript(sourceLang);
+      setLastTargetScript(targetLang);
+
+      // Navigate to result screen
+      navigation.navigate('Result', { originalText: original, transliteratedText: transliterated, targetScript: targetLang, sourceScript: sourceLang });
+    } catch (e) {
+      Alert.alert('OCR Error', e?.message || 'Failed to extract text.');
+      // Clear previous result on error
+      setLastOriginalText(null);
+      setLastTransliteratedText(null);
+      setLastSourceScript(null);
+      setLastTargetScript(null);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const goToLastResult = () => {
+    if (lastTransliteratedText) {
+      navigation.navigate('Result', {
+        originalText: lastOriginalText,
+        transliteratedText: lastTransliteratedText,
+        sourceScript: lastSourceScript,
+        targetScript: lastTargetScript,
+      });
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Capture or Upload</Text>
+      </View>
+
+      {/* Language selectors */}
+      <View style={styles.row}>
+        <View style={styles.pickerContainer}>
+          <Text style={styles.pickerLabel}>From:</Text>
+          <Picker
+            selectedValue={sourceLang}
+            style={styles.picker}
+            onValueChange={(itemValue) => setSourceLang(itemValue)}
+          >
+            {[ 'Auto', ...SUPPORTED_SCRIPTS].map((lang) => (
+              <Picker.Item key={lang} label={lang} value={lang} />
+            ))}
+          </Picker>
+        </View>
+
+        <Text style={styles.arrow}>⇆</Text>
+
+        <View style={styles.pickerContainer}>
+          <Text style={styles.pickerLabel}>To:</Text>
+          <Picker
+            selectedValue={targetLang}
+            style={styles.picker}
+            onValueChange={(itemValue) => setTargetLang(itemValue)}
+          >
+            {SUPPORTED_SCRIPTS.map((lang) => (
+              <Picker.Item key={lang} label={lang} value={lang} />
+            ))}
+          </Picker>
+        </View>
+      </View>
+
+      {/* First big box (for image) */}
+      <View style={styles.imageBox}>
+        {imageUri ? (
+          <Image source={{ uri: imageUri }} style={styles.image} />
+        ) : (
+          <Text style={styles.imageText}>No image selected</Text>
+        )}
+      </View>
+
+      {/* Buttons */}
+      <View style={styles.buttonRow}>
+        <TouchableOpacity style={styles.takePhotoButton} onPress={takePhoto}>
+          <Text style={styles.buttonText}>Take Photo</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.pickGalleryButton} onPress={pickFromGallery}>
+          <Text style={styles.buttonText}>Pick from Gallery</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Extract bar */}
+      <TouchableOpacity style={styles.extractButton} onPress={processImage} disabled={!imageUri || isProcessing}>
+        <Text style={styles.buttonText}>{isProcessing ? 'Processing...' : 'Extract Text'}</Text>
+      </TouchableOpacity>
+
+      {/* Go to Last Result Button */}
+      {lastTransliteratedText && (
+        <TouchableOpacity style={styles.goToResultButton} onPress={goToLastResult}>
+          <Text style={styles.buttonText}>Go to Last Result</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Home Button */}
+      <View style={styles.navCentered}>
+        <TouchableOpacity onPress={() => navigation.navigate('Home')}>
+          <Text style={styles.navItem}>🏠 HOME</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#D6EAF8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    paddingBottom: 70, // Added padding to prevent content from being hidden by sticky button
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 20,
+  },
+  title: {
+    fontSize: 22,
+    marginBottom: 24,
+    fontWeight: '600',
+  },
+  imageBox: {
+    width: '90%',
+    height: 220,
+    backgroundColor: '#F8FAFB',
+    borderColor: 'gray',
+    borderWidth: 2,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 18,
+    padding: 10,
+  },
+  image: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 16,
+  },
+  imageText: {
+    color: 'gray',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  extractedText: {
+    color: 'black',
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '90%',
+    marginBottom: 14,
+  },
+  takePhotoButton: {
+    flex: 1,
+    backgroundColor: '#4A90E2',
+    padding: 12,
+    borderRadius: 15,
+    marginRight: 8,
+    alignItems: 'center',
+  },
+  pickGalleryButton: {
+    flex: 1,
+    backgroundColor: '#4A90E2',
+    padding: 12,
+    borderRadius: 15,
+    marginLeft: 8,
+    alignItems: 'center',
+  },
+  extractButton: {
+    width: '90%',
+    backgroundColor: '#B8E986',
+    padding: 16,
+    borderRadius: 15,
+    alignItems: 'center',
+    marginTop: 6,
+    marginBottom: 18,
+  },
+  extracttext: {
+    width: '90%',
+    height: 220,
+    backgroundColor: '#F8FAFB',
+    borderColor: 'gray',
+    borderWidth: 2,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 18,
+    padding: 10,
+  },
+  buttonText: {
+    color: 'white',
+    fontWeight: '600',
+    fontSize: 17,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+    marginBottom: 15,
+  },
+  pickerContainer: {
+    flex: 1,
+  },
+  pickerLabel: {
+    fontSize: 14,
+    fontWeight: "bold",
+    marginBottom: 5,
+  },
+  picker: {
+    height: 50,
+    width: "100%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 5,
+  },
+  arrow: {
+    fontSize: 24,
+    marginHorizontal: 10,
+  },
+  goToResultButton: {
+    width: '90%',
+    backgroundColor: '#007bff',
+    padding: 16,
+    borderRadius: 15,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  navCentered: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderColor: '#ddd',
+    // Removed marginTop: 10,
+  },
+  navItem: { fontSize: 16, fontWeight: '600' },
+});
